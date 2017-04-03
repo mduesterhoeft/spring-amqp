@@ -27,12 +27,14 @@ import java.io.IOException;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
-
+import org.springframework.amqp.core.MessageListener;
 import org.springframework.amqp.rabbit.annotation.EnableRabbit;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.Connection;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
+import org.springframework.amqp.rabbit.listener.adapter.MessageListenerAdapter;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
 import org.springframework.amqp.rabbit.listener.adapter.MessageListenerAdapter;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -79,6 +81,12 @@ public class TestRabbitTemplateTests {
 	}
 
 	@Test
+	public void testSimpleSendsSimpleMessageListenerContainer() {
+		this.template.convertAndSend("fooSimple", "hello");
+		assertThat(this.config.fooSimpleIn, equalTo("fooSimple:hello"));
+	}
+
+	@Test
 	public void testSendAndReceive() {
 		assertThat(this.template.convertSendAndReceive("baz", "hello"), equalTo("baz:hello"));
 	}
@@ -88,6 +96,8 @@ public class TestRabbitTemplateTests {
 	public static class Config {
 
 		public String fooIn = "";
+
+		public String fooSimpleIn;
 
 		public String barIn = "";
 
@@ -114,6 +124,17 @@ public class TestRabbitTemplateTests {
 			SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
 			factory.setConnectionFactory(connectionFactory());
 			return factory;
+		}
+
+		@Bean
+		public SimpleMessageListenerContainer simpleMessageListenerContainer(ConnectionFactory connectionFactory) {
+			SimpleMessageListenerContainer simpleMessageListenerContainer = new SimpleMessageListenerContainer(connectionFactory);
+
+			simpleMessageListenerContainer.addQueueNames("fooSimple");
+			simpleMessageListenerContainer.setMessageListener(new MessageListenerAdapter((MessageListener) message -> {
+				this.fooSimpleIn = "fooSimple:" + new String(message.getBody());
+            }));
+			return simpleMessageListenerContainer;
 		}
 
 		@RabbitListener(queues = "foo")
