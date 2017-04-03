@@ -25,24 +25,23 @@ import static org.mockito.Mockito.mock;
 
 import java.io.IOException;
 
+import com.rabbitmq.client.Channel;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.springframework.amqp.core.Binding;
+import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.MessageListener;
-import org.springframework.amqp.rabbit.annotation.EnableRabbit;
-import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.core.TopicExchange;
+import org.springframework.amqp.rabbit.annotation.*;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.Connection;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
-import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
-import org.springframework.amqp.rabbit.listener.adapter.MessageListenerAdapter;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
 import org.springframework.amqp.rabbit.listener.adapter.MessageListenerAdapter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.test.context.junit4.SpringRunner;
-
-import com.rabbitmq.client.Channel;
 
 
 /**
@@ -61,34 +60,19 @@ public class TestRabbitTemplateTests {
 
 	@Test
 	public void testSimpleSends() {
-		this.template.convertAndSend("foo", "hello1");
-		assertThat(this.config.fooIn, equalTo("foo:hello1"));
-		this.template.convertAndSend("bar", "hello2");
-		assertThat(this.config.barIn, equalTo("bar:hello2"));
-		assertThat(this.config.smlc1In, equalTo("smlc1:"));
-		this.template.convertAndSend("foo", "hello3");
-		assertThat(this.config.fooIn, equalTo("foo:hello1"));
-		this.template.convertAndSend("bar", "hello4");
-		assertThat(this.config.barIn, equalTo("bar:hello2"));
-		assertThat(this.config.smlc1In, equalTo("smlc1:hello3hello4"));
-
 		this.template.setBroadcast(true);
-		this.template.convertAndSend("foo", "hello5");
-		assertThat(this.config.fooIn, equalTo("foo:hello1foo:hello5"));
-		this.template.convertAndSend("bar", "hello6");
-		assertThat(this.config.barIn, equalTo("bar:hello2bar:hello6"));
-		assertThat(this.config.smlc1In, equalTo("smlc1:hello3hello4hello5hello6"));
-	}
+		this.template.convertAndSend("foo.exchange", "foo", "hello1");
+		assertThat(this.config.fooIn, equalTo("foo:hello1"));
+		assertThat(this.config.fooSimpleIn, equalTo("fooSimple:hello1"));
 
-	@Test
-	public void testSimpleSendsSimpleMessageListenerContainer() {
-		this.template.convertAndSend("fooSimple", "hello");
-		assertThat(this.config.fooSimpleIn, equalTo("fooSimple:hello"));
+		this.template.convertAndSend("bar.exchange", "bar", "hello2");
+		assertThat(this.config.barIn, equalTo("bar:hello2"));
+		
 	}
 
 	@Test
 	public void testSendAndReceive() {
-		assertThat(this.template.convertSendAndReceive("baz", "hello"), equalTo("baz:hello"));
+		assertThat(this.template.convertSendAndReceive("baz.exchange", "baz", "hello"), equalTo("baz:hello"));
 	}
 
 	@Configuration
@@ -100,8 +84,6 @@ public class TestRabbitTemplateTests {
 		public String fooSimpleIn;
 
 		public String barIn = "";
-
-		public String smlc1In = "smlc1:";
 
 		@Bean
 		public TestRabbitTemplate template() throws IOException {
@@ -127,46 +109,55 @@ public class TestRabbitTemplateTests {
 		}
 
 		@Bean
+		org.springframework.amqp.core.Queue fooSimpleQueue() {
+			return new org.springframework.amqp.core.Queue("fooSimple");
+		}
+
+		@Bean
+		org.springframework.amqp.core.Exchange fooExchange() {
+			return new TopicExchange("foo.exchange");
+		}
+
+		@Bean
+		Binding fooBinding() {
+			return BindingBuilder.bind(fooSimpleQueue()).to(fooExchange()).with("some").noargs();
+		}
+
+
+		@Bean
 		public SimpleMessageListenerContainer simpleMessageListenerContainer(ConnectionFactory connectionFactory) {
 			SimpleMessageListenerContainer simpleMessageListenerContainer = new SimpleMessageListenerContainer(connectionFactory);
 
-			simpleMessageListenerContainer.addQueueNames("fooSimple");
+			simpleMessageListenerContainer.addQueues(fooSimpleQueue());
 			simpleMessageListenerContainer.setMessageListener(new MessageListenerAdapter((MessageListener) message -> {
 				this.fooSimpleIn = "fooSimple:" + new String(message.getBody());
             }));
 			return simpleMessageListenerContainer;
 		}
 
-		@RabbitListener(queues = "foo")
+		@RabbitListener(bindings = @QueueBinding(
+				value = @Queue(name = "foo"),
+				exchange = @Exchange(name = "foo.exchange"))
+		)
 		public void foo(String in) {
 			this.fooIn += "foo:" + in;
 		}
 
-		@RabbitListener(queues = "bar")
+		@RabbitListener(bindings = @QueueBinding(
+				value = @Queue(name = "bar"),
+				exchange = @Exchange(name = "bar.exchange"))
+		)
 		public void bar(String in) {
 			this.barIn += "bar:" + in;
 		}
 
-		@RabbitListener(queues = "baz")
+		@RabbitListener(bindings = @QueueBinding(
+				value = @Queue(name = "baz"),
+				exchange = @Exchange(name = "baz.exchange"))
+		)
 		public String baz(String in) {
 			return "baz:" + in;
 		}
-
-		@Bean
-		public SimpleMessageListenerContainer smlc1() throws IOException {
-			SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(connectionFactory());
-			container.setQueueNames("foo", "bar");
-			container.setMessageListener(new MessageListenerAdapter(new Object() {
-
-				@SuppressWarnings("unused")
-				public void handleMessage(String in) {
-					smlc1In += in;
-				}
-
-			}));
-			return container;
-		}
-
+		
 	}
-
 }

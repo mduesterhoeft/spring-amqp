@@ -16,20 +16,15 @@
 
 package org.springframework.amqp.rabbit.test;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.mock;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageBuilder;
 import org.springframework.amqp.core.MessageListener;
@@ -64,14 +59,14 @@ public class TestRabbitTemplate extends RabbitTemplate implements ApplicationCon
 
 	private static final String REPLY_QUEUE = "testRabbitTemplateReplyTo";
 
-	private final Map<String, Listeners> listeners = new HashMap<>();
-
 	private ApplicationContext applicationContext;
 
 	private boolean broadcast;
 
 	@Autowired
 	private RabbitListenerEndpointRegistry registry;
+
+	private MessageListenerAccessor messageListenerAccessor;
 
 	public TestRabbitTemplate(ConnectionFactory connectionFactory) {
 		super(connectionFactory);
@@ -95,32 +90,10 @@ public class TestRabbitTemplate extends RabbitTemplate implements ApplicationCon
 
 	@Override
 	public void afterSingletonsInstantiated() {
-		this.registry.getListenerContainers()
-			.stream()
-			.map(container -> (AbstractMessageListenerContainer) container)
-			.forEach(c -> {
-				for (String queue : c.getQueueNames()) {
-					setupListener(c, queue);
-				}
-			});
-		this.applicationContext.getBeansOfType(AbstractMessageListenerContainer.class).values()
-			.stream()
-			.forEach(container -> {
-				for (String queue : container.getQueueNames()) {
-					setupListener(container, queue);
-				}
-			});
+		Collection<AbstractMessageListenerContainer> abstractMessageListenerContainers = this.applicationContext.getBeansOfType(AbstractMessageListenerContainer.class).values();
+		this.messageListenerAccessor = new MessageListenerAccessor(registry, abstractMessageListenerContainers, applicationContext.getBeansOfType(Binding.class).values());
 	}
 
-	private void setupListener(AbstractMessageListenerContainer container, String queue) {
-		Listeners listenersForQueue = this.listeners.get(queue);
-		if (listenersForQueue == null) {
-			this.listeners.put(queue, new Listeners(container.getMessageListener()));
-		}
-		else {
-			listenersForQueue.listeners.add(container.getMessageListener());
-		}
-	}
 
 	@Override
 	protected boolean useDirectReplyTo() {
@@ -130,8 +103,8 @@ public class TestRabbitTemplate extends RabbitTemplate implements ApplicationCon
 	@Override
 	protected void sendToRabbit(Channel channel, String exchange, String routingKey, boolean mandatory,
 			Message message) throws IOException {
-		Listeners listeners = this.listeners.get(routingKey);
-		if (listeners == null) {
+		List<AbstractAdaptableMessageListener> listeners = this.messageListenerAccessor.getListenerContainersForDestination(exchange);
+		if (listeners.isEmpty()) {
 			throw new IllegalArgumentException("No listener for " + routingKey);
 		}
 		try {
@@ -142,26 +115,27 @@ public class TestRabbitTemplate extends RabbitTemplate implements ApplicationCon
 		}
 	}
 
-	private void invokeListener(Listeners listeners, final Message message, final Channel channel) {
+	private void invokeListener(List<AbstractAdaptableMessageListener> listeners, final Message message, final Channel channel) {
 		if (this.broadcast) {
-			listeners.listeners.forEach(l -> invoke(l, message, channel));
+			listeners.forEach(l -> invoke(l, message, channel));
 		}
 		else {
-			invoke(listeners.next(), message, channel);
+			invoke(listeners.iterator().next(), message, channel);
 		}
 	}
 
 	@Override
 	protected Message doSendAndReceiveWithFixed(String exchange, String routingKey, Message message,
 			CorrelationData correlationData) {
-		Listeners listeners = this.listeners.get(routingKey);
-		if (listeners == null) {
+		List<AbstractAdaptableMessageListener> listeners = this.messageListenerAccessor.getListenerContainersForDestination(exchange);
+
+		if (listeners.isEmpty()) {
 			throw new IllegalArgumentException("No listener for " + routingKey);
 		}
 		Channel channel = mock(Channel.class);
 		final AtomicReference<Message> reply = new AtomicReference<>();
-		Object listener = listeners.next();
-		if (listener instanceof AbstractAdaptableMessageListener) {
+		Object listener = listeners.get(0);
+		if (listener != null) {
 			try {
 				AbstractAdaptableMessageListener adapter = (AbstractAdaptableMessageListener) listener;
 				willAnswer(i -> {
