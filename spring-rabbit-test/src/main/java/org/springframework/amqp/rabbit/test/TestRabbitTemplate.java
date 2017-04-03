@@ -16,16 +16,16 @@
 
 package org.springframework.amqp.rabbit.test;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.mock;
 
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageBuilder;
@@ -33,7 +33,8 @@ import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
-import org.springframework.amqp.rabbit.listener.adapter.MessagingMessageListenerAdapter;
+import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
+import org.springframework.amqp.rabbit.listener.adapter.AbstractAdaptableMessageListener;
 import org.springframework.amqp.rabbit.support.CorrelationData;
 import org.springframework.amqp.rabbit.support.RabbitExceptionTranslator;
 import org.springframework.beans.factory.SmartInitializingSingleton;
@@ -56,10 +57,13 @@ public class TestRabbitTemplate extends RabbitTemplate implements SmartInitializ
 
 	private static final String REPLY_QUEUE = "testRabbitTemplateReplyTo";
 
-	private final Map<String, MessagingMessageListenerAdapter> listeners = new HashMap<>();
+	private final Map<String, AbstractAdaptableMessageListener> listeners = new HashMap<>();
 
 	@Autowired
 	private RabbitListenerEndpointRegistry registry;
+
+	@Autowired
+	private List<SimpleMessageListenerContainer> simpleMessageListenerContainers;
 
 	public TestRabbitTemplate(ConnectionFactory connectionFactory) {
 		super(connectionFactory);
@@ -68,12 +72,11 @@ public class TestRabbitTemplate extends RabbitTemplate implements SmartInitializ
 
 	@Override
 	public void afterSingletonsInstantiated() {
-		registry.getListenerContainers()
-			.stream()
+		Stream.concat(simpleMessageListenerContainers.stream(), registry.getListenerContainers().stream())
 			.map(c -> (AbstractMessageListenerContainer) c)
 			.forEach(c -> {
 				for (String queue : c.getQueueNames()) {
-					listeners.put(queue, (MessagingMessageListenerAdapter) c.getMessageListener());
+					listeners.put(queue, (AbstractAdaptableMessageListener) c.getMessageListener());
 				}
 				// TODO: support multiple listeners for the same queue(s)? That's a bit odd with @RabbitListener though.
 			});
@@ -87,7 +90,7 @@ public class TestRabbitTemplate extends RabbitTemplate implements SmartInitializ
 	@Override
 	protected void sendToRabbit(Channel channel, String exchange, String routingKey, boolean mandatory,
 			Message messageToUse) throws IOException {
-		MessagingMessageListenerAdapter adapter = listeners.get(routingKey);
+		AbstractAdaptableMessageListener adapter = listeners.get(routingKey);
 		if (adapter == null) {
 			throw new IllegalArgumentException("No listener for " + routingKey);
 		}
@@ -102,7 +105,7 @@ public class TestRabbitTemplate extends RabbitTemplate implements SmartInitializ
 	@Override
 	protected Message doSendAndReceiveWithFixed(String exchange, String routingKey, Message message,
 			CorrelationData correlationData) {
-		MessagingMessageListenerAdapter adapter = listeners.get(routingKey);
+		AbstractAdaptableMessageListener adapter = listeners.get(routingKey);
 		if (adapter == null) {
 			throw new IllegalArgumentException("No listener for " + routingKey);
 		}
